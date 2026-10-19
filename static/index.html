@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>我的占座 · 南工自习</title><link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<aside class="sidebar">
+  <a class="brand" href="#overview"><img src="/emblem.png" alt="南京工业大学校徽"><span><small>SEAT AUTOMATION</small>我的占座</span></a>
+  <nav aria-label="主要导航">
+    <a href="#overview" data-nav="overview"><strong>系统概览</strong><span>查看账号、状态和最近动态</span></a>
+    <a href="#new" data-nav="new"><strong>新建任务</strong><span>选择馆室与座位并创建任务</span></a>
+    <a class="selected" href="#tasks" data-nav="tasks"><strong>任务管理</strong><span>查看历史记录并执行操作</span></a>
+  </nav>
+  <div class="side-note"><span class="nav-label">连接状态</span><strong><span class="status-dot"></span> 你的本地自习助手</strong><p>江浦校区 · 双账号交替持座<br>个人定制 · 非学校官方软件</p></div>
+  <button id="exit" class="secondary side-exit">退出程序</button>
+</aside>
+<main>
+  <header><div class="breadcrumb"><span>DASHBOARD</span><strong id="breadcrumb-title">任务管理</strong></div><div class="header-right"><span id="active-badge" class="header-pill">暂无运行任务</span><a href="#overview" id="account-stat" class="header-pill">0 / 2 账号就绪</a><span id="connection" class="header-pill connection">正在连接</span></div></header>
+  <section class="intro"><div><p id="page-eyebrow" class="eyebrow">TASK MANAGER</p><h1 id="page-title">任务管理</h1><p id="page-description">左侧快速切换任务，右侧查看详情、当前阶段与手动操作入口。</p></div><div class="heading-actions"><button id="create" class="primary">新建任务</button><button id="back-tasks" class="secondary" hidden>前往任务管理</button></div></section>
+  <div id="mode-banner" class="banner">模拟演示使用虚拟账号和虚拟座位，可以放心体验整个轮换流程。</div>
+  <section id="overview" class="page-view" data-view="overview" hidden>
+    <div class="overview-toolbar"><div><h2>运行概况</h2><p class="helper">查看两个账号的准备情况和任务接棒进度。</p></div><div class="mode-control"><label for="mode">当前运行模式</label><select id="mode"><option value="demo">模拟演示</option><option value="live">真实账号</option></select></div></div>
+    <section class="stats" aria-label="任务概况"><article><span>运行中的任务</span><strong id="running-stat">0<small>个</small></strong><p>每组账号同时运行一个任务</p></article><article><span>已完成接棒</span><strong id="rotation-stat">0<small>次</small></strong><p>退座后由另一账号立即接棒</p></article><article><span>账号准备情况</span><strong id="ready-stat">0 / 2</strong><p>接棒前核对登录和退座冷却</p></article></section>
+    <section id="accounts" class="section"><div class="section-heading"><div><p class="eyebrow">ACCOUNTS</p><h2>双账号状态</h2></div><div class="heading-actions"><button id="advance" class="secondary">演示一次轮换</button><button id="verify" class="secondary">刷新 / 验证登录</button></div></div><div id="account-list" class="account-grid"></div><p id="login-help" class="helper" hidden>请分别登录两个不同账号。登录后在学校网页打开图书馆选座页面，再返回点击“验证登录”。登录窗口需保持打开。</p></section>
+    <section id="activity" class="section"><div class="section-heading"><div><p class="eyebrow">EVENTS</p><h2>最近动态</h2></div><span class="subtle">本机保存 · 最近 200 条</span></div><div id="events" class="events"></div></section>
+  </section>
+  <section id="tasks" class="page-view manager-grid" data-view="tasks">
+    <section class="task-list-panel panel"><div class="panel-heading"><div><p class="eyebrow">TASK LIST</p><h2>任务列表</h2></div><span id="task-count" class="count-tag">0 条记录</span></div><div id="task-list"></div></section>
+    <section class="task-detail-panel panel"><div class="panel-heading"><div><p class="eyebrow">TASK DETAIL</p><h2>任务详情</h2></div><span id="task-number" class="count-tag">等待选择</span></div><div id="task-detail"></div></section>
+  </section>
+  <section id="editor" class="page-view" data-view="new" hidden>
+    <form id="task-form">
+      <p id="editor-mode" class="helper" hidden></p>
+      <div class="composer-grid">
+        <section class="composer-card panel"><div class="panel-heading"><div><p class="eyebrow">STEP 01</p><h2>选择馆室</h2></div><span class="count-tag">江浦校区</span></div>
+          <label>目标馆室<select name="lib" required><option value="">正在加载…</option></select></label>
+          <p class="helper">显示江浦校区逸夫、浦江两馆的馆室，选择后加载座位状态。</p>
+          <div class="selection-note"><strong>当前选择</strong><p id="room-summary">请选择馆室</p></div>
+          <label>任务名称<input name="name" value="自习" maxlength="60" placeholder="自习" required></label>
+        </section>
+        <section class="composer-card panel seat-card"><div class="panel-heading"><div><p class="eyebrow">STEP 02</p><h2>选择座位</h2></div><span id="seat-status-tag" class="count-tag">等待选座</span></div>
+          <label class="checkbox-label"><input id="show-all-seats" type="checkbox">显示所有座位（含当前不可选）</label>
+          <label>目标座位<select name="seat" required disabled><option value="">请先选择馆室</option></select></label>
+          <p id="seat-hint" class="helper" aria-live="polite">选择空闲座位，或在下方实时图中点选。</p>
+          <section class="seat-panel" aria-label="实时座位场景图">
+            <div class="map-heading"><h3 id="map-title">实时座位场景图</h3><button type="button" id="refresh-seats" class="secondary" disabled>刷新座位</button></div>
+            <div id="map-counts" class="map-counts">选择馆室后查看空闲情况</div>
+            <div class="seat-legend"><span><i class="available"></i>空闲</span><span><i class="occupied"></i>已占用</span><span><i class="unknown"></i>未知 / 不开放</span><span><i class="selected"></i>已选择</span></div>
+            <div class="map-toolbar"><label class="seat-search"><span>找座位</span><input id="seat-search" type="search" placeholder="输入座位号" autocomplete="off" disabled></label><div class="zoom-controls"><button type="button" id="zoom-out" aria-label="缩小座位图" disabled>−</button><button type="button" id="zoom-fit" disabled>适应</button><button type="button" id="zoom-in" aria-label="放大座位图" disabled>＋</button></div></div>
+            <div id="seat-map" class="seat-map" tabindex="0" aria-label="座位图，可滚动查看"><div class="map-placeholder"><span>▦</span><strong>先选馆室，再找座位</strong></div></div>
+            <div class="map-caption"><span id="map-source">按学校座位分布显示</span><span id="map-updated"></span></div>
+            <div id="selected-seat" class="selected-seat" aria-live="polite">尚未选择座位</div>
+          </section>
+        </section>
+        <section class="composer-card panel"><div class="panel-heading"><div><p class="eyebrow">STEP 03</p><h2>设置生效时间</h2></div><span class="count-tag">默认 07:00—22:00</span></div>
+          <label>开始时间<input type="datetime-local" name="start"><small>留空表示立即开始；已过开始时间时，点击开始后立即执行。</small></label>
+          <label>结束时间<input type="datetime-local" name="end"><small>默认自习当天 22:00 结束轮换，当前预约保留。</small></label>
+          <p id="schedule-hint" class="helper"></p>
+          <label>提前轮换时间<select name="lead"><option value="300">到期前 5 分钟（推荐）</option><option value="180">到期前 3 分钟</option><option value="60">到期前 1 分钟</option></select><small>接棒账号冷却未结束时，会在退座前等待。</small></label>
+        </section>
+        <section class="composer-card panel summary-card"><div class="panel-heading"><div><p class="eyebrow">STEP 04</p><h2>任务摘要</h2></div><span class="count-tag">提交前确认</span></div>
+          <div id="task-summary" class="detail-grid"></div>
+          <p class="helper">先保存为草稿，再到任务管理点击“开始”执行。</p>
+          <div class="dialog-actions"><button type="button" id="cancel-editor" class="secondary">返回任务管理</button><button type="submit" id="save-task" class="primary" disabled>创建占座任务</button></div>
+        </section>
+      </div>
+    </form>
+  </section>
+  <footer><span>我的占座 <span class="version">v0.2.1 · 江浦校区</span></span><span>关闭网页后后台仍会运行 · 电脑休眠时无法执行轮换</span></footer>
+</main>
+<div id="toast" role="status" aria-live="polite" hidden></div>
+<script src="/app.js" defer></script>
+</body></html>

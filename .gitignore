@@ -1,0 +1,44 @@
+# Local task data and browser sessions
+data/
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+*.db-wal
+*.db-shm
+browser-profile*/
+browser-session*/
+storage-state*.json
+auth-state*.json
+
+# Credentials and machine-specific configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+server.toml
+
+# Generated files and local development tools
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+node_modules/
+*.log
+.pytest_cache/
+.playwright-cli/
+test-results/
+playwright-report/
+tmp/
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store
+
+# Local collaboration history (kept on this computer)
+/PROJECT_MEMORY.md
+/WORKLOG.md
