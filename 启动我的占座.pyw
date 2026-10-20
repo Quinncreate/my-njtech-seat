@@ -44,7 +44,7 @@ def main():
             time.sleep(0.25)
         else:
             raise RuntimeError("程序启动较慢，请稍后再双击快捷方式。")
-    webbrowser.open(URL + "/dashboard/tasks")
+    webbrowser.open(URL + "/dashboard/tasks#new")
 
 
 if __name__ == "__main__":

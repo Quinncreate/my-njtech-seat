@@ -13,11 +13,13 @@ from pathlib import Path
 from seat_layout import CAMPUS
 
 COOLDOWN = 65
-ACTIVE = {"running", "recovering", "scheduled"}
+ACTIVE = {"running", "recovering", "scheduled", "switching", "finishing"}
 
 
 class Problem(Exception):
-    pass
+    def __init__(self, message, *, task_id=None):
+        super().__init__(message)
+        self.task_id = task_id
 
 
 class Store:
@@ -114,7 +116,9 @@ class Engine:
         self.accounts = {m: {r: {"ready": m == "demo", "reservation": None} for r in ("A", "B")}
                          for m in ("demo", "live")}
         for t in store.data["tasks"]:
-            if t["status"] in ACTIVE and t["status"] != "scheduled":
+            if t.get("finish_requested") and t["status"] != "completed":
+                t["status"], t["message"] = "finishing", "正在核对结束任务的退座结果。"
+            elif t["status"] in ACTIVE and t["status"] != "scheduled":
                 t["status"], t["message"] = "recovering", "正在核对两个账号的实际预约。"
         store.save()
 
@@ -138,7 +142,7 @@ class Engine:
         for r, a in accounts.items():
             a["cooldown"] = max(0, math.ceil(data["cooldowns"].get(mode + ":" + r, 0) - now))
         return {"mode": mode, "now": now, "accounts": accounts,
-                "tasks": data["tasks"], "events": data["events"], "version": "0.2.0"}
+                "tasks": data["tasks"], "events": data["events"], "version": "0.5.1"}
 
     def create(self, body, *, _original=None):
         with self.lock:
@@ -181,6 +185,8 @@ class Engine:
             t = self.get_task(id)
             if not t or t["status"] not in ("draft", "paused", "attention"):
                 raise Problem("请先暂停任务，再编辑。")
+            if t.get("finish_requested"):
+                raise Problem("任务正在等待退座确认，请先完成结束退座。")
             if t["pending"]:
                 raise Problem("上次操作结果待核对，请先恢复任务。")
             fields = self.validate(body, t["mode"], t)
@@ -190,13 +196,13 @@ class Engine:
             self.event("已编辑任务", t)
             self.store.save()
 
-    def action(self, id, action):
+    def action(self, id, action, *, expected_owner=None):
         with self.lock:
             t = self.get_task(id)
             if not t:
                 raise Problem("任务不存在。")
             if action == "rerun":
-                if t["status"] in ACTIVE or t["status"] == "paused":
+                if t["status"] in ACTIVE or t["status"] == "paused" or t.get("finish_requested") or t["pending"]:
                     raise Problem("请先结束原任务。")
                 body = {k: t[k] for k in ("name", "lib", "seat", "lib_name", "lead")}
                 body["name"] = body["name"][:55] + " · 重跑"
@@ -204,35 +210,47 @@ class Engine:
                     raise Problem("请先切换到原任务的运行模式。")
                 return self.create(body, _original=t)
             if action in ("start", "resume"):
+                if t.get("finish_requested"):
+                    raise Problem("任务已要求结束，请先完成退座，不能恢复轮换。")
                 if t["status"] not in ("draft", "paused", "attention"):
                     raise Problem("任务当前不能启动。")
                 if t["end"] and t["end"] <= self.now(t["mode"]):
                     raise Problem("结束时间已过，请先编辑。")
-                if any(x["id"] != id and x["mode"] == t["mode"] and
-                       (x["status"] in ACTIVE or x["status"] == "paused" or x["pending"])
-                       for x in self.store.data["tasks"]):
-                    raise Problem("两个账号同一时间只能运行一个任务，请先结束其他任务。")
+                self.prepare_start(t)
                 t["status"], t["message"] = "recovering", "正在核对预约和账号冷却。"
                 if t["start"] > self.now(t["mode"]):
                     t["status"], t["message"] = "scheduled", "等待计划开始时间。"
             elif action == "pause":
-                if t["status"] not in ACTIVE:
+                if t["status"] not in ("running", "recovering", "scheduled") or t.get("finish_requested") or t.get("manual_handoff"):
                     raise Problem("任务当前没有运行。")
                 t["status"], t["message"] = "paused", "已暂停轮换，现有预约保留至学校规定的到期时间。"
             elif action == "finish":
                 if t["status"] == "completed":
                     raise Problem("任务已结束。")
-                if t["pending"]:
-                    states = self.observe(t["mode"])
-                    holders = [r for r in ("A", "B") if self.matches(t, states[r]["reservation"])]
-                    if len(holders) > 1:
-                        raise Problem("预约记录冲突，请核对两个登录账号是否不同。")
-                    if t["pending"]["kind"] == "cancel":
-                        role = t["pending"]["role"]
-                        self.store.data["cooldowns"][t["mode"] + ":" + role] = max(
-                            self.ready_at(t["mode"], role), self.now(t["mode"]) + COOLDOWN)
-                    t["owner"], t["pending"] = holders[0] if holders else None, None
-                t["status"], t["message"] = "completed", "轮换已结束；现有预约不会被主动退座。"
+                if t["status"] == "draft" and not t["owner"] and not t["pending"]:
+                    t["status"], t["message"] = "completed", "草稿已结束，未操作预约。"
+                else:
+                    self.exclusive(t)
+                    # Only an explicit retry may authorize a second finish request.
+                    if t.get("finish_requested") and t["status"] == "attention":
+                        t["pending"] = None
+                    t["finish_requested"], t["manual_handoff"] = True, None
+                    t["status"], t["message"] = "finishing", "已停止轮换，正在核对并释放本任务座位。"
+            elif action == "handoff":
+                self.exclusive(t)
+                if (t["status"] not in ("running", "paused") or t.get("finish_requested") or
+                        t["pending"] or t.get("manual_handoff") or t["owner"] not in ("A", "B")):
+                    raise Problem("请在账号实际持座且没有待核对操作时切换。")
+                if expected_owner != t["owner"]:
+                    raise Problem("持座账号已变化，请刷新后再切换。")
+                if t["end"] and t["end"] <= self.now(t["mode"]):
+                    raise Problem("任务时间已结束，不能切换持座账号。")
+                other = "B" if t["owner"] == "A" else "A"
+                remaining = math.ceil(max(self.ready_at(t["mode"], other), t["acquired"] + COOLDOWN) - self.now(t["mode"]))
+                if remaining > 0:
+                    raise Problem(f"暂不能切换，还需保护等待 {remaining} 秒；当前预约已保留。")
+                t["manual_handoff"] = {"from": t["owner"], "paused": t["status"] == "paused"}
+                t["status"], t["message"] = "switching", f"正在核对账号 {other}，准备接棒同一座位。"
             else:
                 raise Problem("不支持的操作。")
             self.event(t["message"], t)
@@ -242,7 +260,7 @@ class Engine:
         with self.lock:
             if mode not in self.providers:
                 raise Problem("运行模式不可用。")
-            if any(t["status"] in ACTIVE or t["status"] == "paused" for t in self.store.data["tasks"]):
+            if any(t["status"] in ACTIVE or t["status"] == "paused" or t["pending"] or t.get("finish_requested") for t in self.store.data["tasks"]):
                 raise Problem("请先结束当前任务，再切换运行模式。")
             self.store.data["mode"] = mode
             self.event("已切换为" + ("模拟演示" if mode == "demo" else "真实账号模式"))
@@ -251,10 +269,53 @@ class Engine:
     def ready_at(self, mode, role):
         return self.store.data["cooldowns"].get(mode + ":" + role, 0)
 
+    def blocking_tasks(self, t):
+        return [x for x in self.store.data["tasks"]
+                if x["id"] != t["id"] and x["mode"] == t["mode"] and
+                (x["status"] in ACTIVE or x["status"] == "paused" or x["pending"] or
+                 x.get("finish_requested") or x.get("manual_handoff"))]
+
+    @staticmethod
+    def task_conflict(t, detail="请先结束该任务，再开始新任务。"):
+        status = {"paused": "已暂停", "scheduled": "等待开始", "running": "运行中",
+                  "recovering": "正在核对", "switching": "正在切换", "finishing": "正在退座",
+                  "attention": "需要处理"}.get(t["status"], "待核对")
+        return Problem(f'任务“{t["name"]}”（{status}，座位 {t["seat_name"]}，编号 {t["id"][:6]}）'
+                       f'尚未结束。{detail}', task_id=t["id"])
+
+    def prepare_start(self, t):
+        blockers = self.blocking_tasks(t)
+        if not blockers:
+            return
+        # Only dormant, confirmed empty pauses can be retired. Pending operations
+        # and running/scheduled tasks keep their claim even when accounts look free.
+        uncertain = next((x for x in blockers if x["status"] != "paused" or x["pending"] or
+                          x.get("finish_requested") or x.get("manual_handoff")), None)
+        if uncertain:
+            raise self.task_conflict(uncertain)
+        try:
+            states = self.observe(t["mode"])
+        except Exception:
+            self.store.save()
+            raise self.task_conflict(blockers[0], "尚未确认两个账号均已空闲，请先验证账号并核对旧任务。") from None
+        if any(a["reservation"] for a in states.values()):
+            self.store.save()
+            raise self.task_conflict(blockers[0], "账号仍有预约，请先核对或结束该任务。")
+        for old in blockers:
+            old.update(status="completed", owner=None, next=0, expires=0,
+                       message="启动新任务前已核实两个账号均无预约，旧的暂停任务已结束。")
+            self.event(old["message"], old)
+
+    def exclusive(self, t):
+        blockers = self.blocking_tasks(t)
+        if blockers:
+            raise self.task_conflict(blockers[0], "请先处理该任务，再操作当前任务。")
+
     def attention(self, t, message):
         if t["status"] != "attention" or t["message"] != message:
             self.event(message, t)
         t["status"], t["message"] = "attention", message
+        t["manual_handoff"] = None
 
     def observe(self, mode):
         states = self.providers[mode].observe()
@@ -286,6 +347,12 @@ class Engine:
             tasks = [t for t in self.store.data["tasks"] if t["status"] in ACTIVE]
             for t in tasks:
                 now = self.now(t["mode"])
+                if t.get("finish_requested"):
+                    try:
+                        self.finish_step(t)
+                    except Exception:
+                        self.attention(t, "已停止轮换，但退座尚未确认；请恢复登录后点击“重试退座”。")
+                    continue
                 if t["end"] and now >= t["end"]:
                     if t["pending"]:
                         self.attention(t, "已到结束时间，但上次操作结果待核对。请验证账号后点击结束轮换。")
@@ -298,7 +365,10 @@ class Engine:
                     continue
                 try:
                     states = self.observe(t["mode"])
-                    self.step(t, states)
+                    if t.get("manual_handoff") and not t["pending"]:
+                        self.manual_step(t, states)
+                    else:
+                        self.step(t, states)
                 except Problem as e:
                     t["status"], t["message"] = "recovering", str(e)
                 except Exception:
@@ -308,6 +378,54 @@ class Engine:
     @staticmethod
     def matches(t, reservation):
         return reservation and reservation["lib"] == t["lib"] and reservation["seat"] == t["seat"]
+
+    def finish_step(self, t):
+        mode, p = t["mode"], self.providers[t["mode"]]
+        states = p.observe()
+        self.record_observation(mode, states)
+        holders = [r for r in ("A", "B") if states[r]["ready"] and self.matches(t, states[r]["reservation"])]
+        if len(holders) > 1:
+            return self.attention(t, "两个账号的预约记录冲突，无法确认退座，请在学校页面核对。")
+        if holders:
+            role = holders[0]
+            t["owner"], t["expires"] = role, states[role]["reservation"]["expires"]
+            if t["pending"] and t["pending"]["kind"] == "finish_cancel":
+                return self.attention(t, "学校仍显示本任务座位，已停止轮换；核对后可点击“重试退座”。")
+            t["pending"] = {"kind": "finish_cancel", "role": role, "time": self.now(mode)}
+            self.store.save()
+            try:
+                p.cancel(role)
+            except Problem:
+                pass  # A lost reply is resolved by reading, never by an automatic retry.
+            states = p.observe()
+            self.record_observation(mode, states)
+            if any(self.matches(t, s["reservation"]) for s in states.values()):
+                return self.attention(t, "退座尚未确认，已停止轮换；请核对学校页面后点击“重试退座”。")
+        if not all(states[r]["ready"] for r in ("A", "B")):
+            return self.attention(t, "已停止轮换，尚有账号登录不可用，无法完整确认退座；恢复登录后点击“重试退座”。")
+        pending = t["pending"]
+        if pending and pending["kind"] in ("cancel", "finish_cancel"):
+            role = pending["role"]
+            self.store.data["cooldowns"][mode + ":" + role] = max(self.ready_at(mode, role), self.now(mode) + COOLDOWN)
+        t.update(status="completed", message="轮换已结束，已确认本任务座位不再由这两个账号占用。",
+                 owner=None, pending=None, next=0, expires=0, finish_requested=False, manual_handoff=None)
+        self.event(t["message"], t)
+
+    def manual_step(self, t, states):
+        request = t["manual_handoff"]
+        role, mode = request["from"], t["mode"]
+        other = "B" if role == "A" else "A"
+        if not self.matches(t, states[role]["reservation"]) or states[other]["reservation"]:
+            return self.attention(t, "持座情况已变化或接棒账号已有预约，未执行切换，请核对后恢复。")
+        remaining = math.ceil(max(self.ready_at(mode, other), t["acquired"] + COOLDOWN) - self.now(mode))
+        if remaining > 0:
+            return self.attention(t, f"暂不能切换，还需保护等待 {remaining} 秒；当前预约已保留。")
+        t["pending"] = {"kind": "cancel", "role": role, "time": self.now(mode)}
+        self.store.save()
+        self.providers[mode].cancel(role)
+        self.store.data["cooldowns"][mode + ":" + role] = self.now(mode) + COOLDOWN
+        self.store.save()
+        self.acquire(t, other, True)
 
     def step(self, t, states):
         now, mode = self.now(t["mode"]), t["mode"]
@@ -332,12 +450,17 @@ class Engine:
                 return self.attention(t, "原预约已结束或被外部操作改变，请核对后恢复任务。")
             choices = [r for r in ("A", "B") if self.ready_at(mode, r) <= now]
             if not choices:
-                t["status"], t["message"] = "running", "等待账号退座冷却结束。"
+                t["next"] = min(self.ready_at(mode, r) for r in ("A", "B"))
+                remaining = max(0, math.ceil(t["next"] - now))
+                t["status"], t["message"] = "running", f"账号冷却中，约 {remaining} 秒后开始选座。"
                 return
             return self.acquire(t, choices[0], False)
         role = holders[0]
         reservation = states[role]["reservation"]
         pending = t["pending"]
+        manual = t.get("manual_handoff")
+        if manual and role == manual["from"] and pending and pending["kind"] == "reserve":
+            return self.attention(t, "接棒账号尚未取得座位，已停止切换，请核对实际预约。")
         if pending and pending["kind"] == "cancel":
             t["pending"] = None
             return self.attention(t, "上次退座请求结果不确定，已停止继续退座，请核对学校页面后恢复。")
@@ -351,6 +474,13 @@ class Engine:
             return self.attention(t, "无法确认预约到期时间，请在学校页面核对。")
         other = "B" if role == "A" else "A"
         t["next"] = max(t["expires"] - t["lead"], t["acquired"] + COOLDOWN, self.ready_at(mode, other))
+        manual = t.get("manual_handoff")
+        if manual:
+            t["manual_handoff"] = None
+            t["status"] = "paused" if manual["paused"] else "running"
+            t["message"] = f"已手动切换至账号 {role}，" + ("轮换仍保持暂停。" if manual["paused"] else "继续自动轮换。")
+            self.event(t["message"], t)
+            return
         if t["next"] >= t["expires"] - 2:
             return self.attention(t, "接棒账号冷却或持座保护超过剩余预约时间，已保留当前预约。")
         t["status"], t["message"] = "running", f"账号 {role} 持座，等待下一次轮换。"

@@ -71,6 +71,22 @@ class EngineTests(unittest.TestCase):
         self.engine.tick()
         self.assertEqual(t["owner"], "B")
 
+    def test_initial_cooldown_has_a_deadline_and_does_not_release_or_reserve_early(self):
+        now = self.clock[0]
+        self.store.data["cooldowns"].update({"demo:A": now + 40, "demo:B": now + 65})
+        t = self.task()
+        self.assertEqual(self.calls, [])
+        self.assertEqual(t["next"], now + 40)
+        self.assertIn("40 秒", t["message"])
+        self.clock[0] = now + 39
+        self.engine.tick()
+        self.assertEqual(self.calls, [])
+        self.assertIn("1 秒", t["message"])
+        self.clock[0] = now + 40
+        self.engine.tick()
+        self.assertEqual(t["owner"], "A")
+        self.assertEqual(len(self.calls), 1)
+
     def test_impossible_cooldown_preserves_reservation(self):
         t = self.task()
         self.store.data["cooldowns"]["demo:B"] = t["expires"] + 60
@@ -166,7 +182,10 @@ class EngineTests(unittest.TestCase):
         with self.assertRaises(Problem):
             self.engine.update(t["id"], {"name": "换座", "lib": 2, "seat": "2-001"})
         self.engine.action(t["id"], "finish")
-        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(t["status"], "finishing")
+        self.engine.tick()
+        self.assertEqual(len(self.calls), 2)
+        self.assertIsNone(t["owner"])
         new = self.engine.action(t["id"], "rerun")
         self.assertNotEqual(new["id"], t["id"])
         self.assertEqual(new["status"], "draft")
@@ -205,15 +224,16 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(t["status"], "attention")
         self.assertIsNone(t["pending"])
 
-    def test_finish_pending_operation_reconciles_without_mutation(self):
+    def test_finish_pending_operation_releases_the_confirmed_holder(self):
         t = self.task()
         t["pending"] = {"kind": "cancel", "role": "A"}
         t["status"] = "recovering"
         self.engine.action(t["id"], "finish")
+        self.engine.tick()
         self.assertEqual(t["status"], "completed")
-        self.assertEqual(t["owner"], "A")
+        self.assertIsNone(t["owner"])
         self.assertIsNone(t["pending"])
-        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(len(self.calls), 2)
 
     def test_end_time_does_not_hide_uncertain_operation(self):
         t = self.task(end=self.clock[0] + 1)
@@ -228,14 +248,27 @@ class EngineTests(unittest.TestCase):
 
 
 class AdapterTests(unittest.TestCase):
-    def test_legacy_mutation_only_retried_for_pre_execution_validation(self):
+    def test_different_identity_is_not_ready_and_cannot_keep_a_mutation_token(self):
+        class Worker:
+            def call(self, method, **kwargs):
+                if method == "confirmIdentity":
+                    raise Problem("登录账号与固定绑定不符")
+                return {"data": {"userAuth": {"reserve": {"reserve": None, "getSToken": "memory-test"}}}}
+        adapter = LiveProvider(Worker())
+        states = adapter.observe()
+        self.assertFalse(states["A"]["ready"])
+        self.assertFalse(states["B"]["ready"])
+        self.assertIn("固定绑定不符", states["A"]["reason"])
+        self.assertEqual(adapter.tokens, {})
+
+    def test_alternate_mutation_only_retried_for_pre_execution_validation(self):
         class Worker:
             calls = 0
             def call(self, *args, **kwargs):
                 self.calls += 1
                 if self.calls == 1:
-                    return {"errors": [{"message": 'Cannot query field "reserveSeat" on type "Reserve".'}]}
-                return {"data": {"userAuth": {"reserve": {"reserueSeat": True}}}}
+                    return {"errors": [{"message": 'Cannot query field "reserueSeat" on type "Reserve".'}]}
+                return {"data": {"userAuth": {"reserve": {"reserveSeat": True}}}}
         worker = Worker()
         LiveProvider(worker).reserve("A", {"lib": 1, "seat": "test"})
         self.assertEqual(worker.calls, 2)

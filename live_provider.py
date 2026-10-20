@@ -1,13 +1,14 @@
 """Own GraphQL adapter, using official pages in isolated browser contexts.
 
-Login is performed by the user on the school's website. Credentials and session
-headers never enter SQLite, logs or configuration files.
+Login is performed on the school's website in separate local Chrome profiles.
+Passwords are not saved. Request headers stay in memory; Chrome retains cookies.
 """
 from __future__ import annotations
 
 import datetime as dt
 import json
 import queue
+import re
 import shutil
 import subprocess
 import threading
@@ -25,10 +26,18 @@ LAYOUT = """query libLayout($libId:Int,$libType:Int) { userAuth { reserve {
     seats { key name type seat_status status x y }
   } }
 } } }"""
-RESERVE = """mutation reserveSeat($libId:Int!,$seatKey:String!,$captchaCode:String,$captcha:String!) {
- userAuth { reserve { reserveSeat(libId:$libId,seatKey:$seatKey,captchaCode:$captchaCode,captcha:$captcha) } }
+RESERVE = """mutation reserueSeat($libId:Int!,$seatKey:String!,$captchaCode:String,$captcha:String!) {
+ userAuth { reserve { reserueSeat(libId:$libId,seatKey:$seatKey,captchaCode:$captchaCode,captcha:$captcha) } }
 }"""
 CANCEL = "mutation reserveCancle($sToken:String!) { userAuth { reserve { reserveCancle(sToken:$sToken) { timerange img hours mins per } } } }"
+
+
+def graphql_payload(document, variables=None):
+    payload = {"query": document, "variables": variables or {}}
+    operation = re.match(r"\s*(?:query|mutation)\s+([_A-Za-z][_0-9A-Za-z]*)\b", document)
+    if operation:
+        payload["operationName"] = operation[1]
+    return payload
 
 
 def expiry(value, fallback=None):
@@ -95,12 +104,14 @@ class BrowserWorker:
                 self.proc.stdin.write(json.dumps({"id": id, "method": method, **params}, ensure_ascii=False) + "\n")
                 self.proc.stdin.flush()
                 while True:
-                    response = self.messages.get(timeout=35)
+                    response = self.messages.get(timeout=90 if method == "restore" else 35)
                     if response.get("closed"):
                         raise Problem("登录浏览器已关闭，请重新登录并验证。")
                     if response.get("id") != id:
                         continue
                     if response.get("error"):
+                        if response.get("code") == "IDENTITY_MISMATCH":
+                            raise Problem("登录账号与固定绑定不符，请重新登录原账号；更换账号请使用“切换账号”。")
                         raise Problem("浏览器连接不可用，请打开学校选座页面后重新验证登录。")
                     return response.get("result")
             except (queue.Empty, OSError, BrokenPipeError):
@@ -121,6 +132,19 @@ class LiveProvider:
         self.tokens = {}
         self.catalog = None
         self.catalog_at = 0
+        self.account_info = {}
+
+    def restore(self):
+        self.account_info = self.worker.call("restore")
+
+    def switch_account(self, role):
+        if role not in ("A", "B"):
+            raise Problem("账号标记无效。")
+        self.tokens.pop(role, None)
+        self.catalog = None
+        info = self.worker.call("switch", role=role)
+        self.account_info[role] = info
+        return info
 
     def login(self, role):
         if role not in ("A", "B"):
@@ -128,7 +152,7 @@ class LiveProvider:
         return self.worker.call("login", role=role)
 
     def query(self, role, document, variables=None):
-        result = self.worker.call("fetch", role=role, payload={"query": document, "variables": variables or {}})
+        result = self.worker.call("fetch", role=role, payload=graphql_payload(document, variables))
         return self.unpack(result)
 
     @staticmethod
@@ -156,10 +180,16 @@ class LiveProvider:
                                    "expires": expiry(reservation.get("exp_date"), reservation.get("exp_date_str"))}
                 else:
                     reservation = None
-                result[role] = {"ready": True, "reservation": reservation}
-            except Problem:
+                info = self.worker.call("confirmIdentity", role=role)
+                if isinstance(info, dict):
+                    self.account_info[role] = info
+                result[role] = {"ready": True, "reservation": reservation,
+                                "label": self.account_info.get(role, {}).get("label", "固定账号 " + role)}
+            except Problem as exc:
                 self.tokens.pop(role, None)
-                result[role] = {"ready": False, "reservation": None}
+                result[role] = {"ready": False, "reservation": None,
+                                "label": self.account_info.get(role, {}).get("label", "固定账号 " + role),
+                                "reason": str(exc)}
         return result
 
     def read_role(self):
@@ -196,18 +226,19 @@ class LiveProvider:
         return normalize_layout(room, info)
 
     def reserve(self, role, task):
-        variables = {"libId": task["lib"], "seatKey": task["seat"], "captchaCode": None, "captcha": ""}
-        result = self.worker.call("fetch", role=role, payload={"query": RESERVE, "variables": variables})
-        field = "reserveSeat"
+        variables = {"libId": task["lib"], "seatKey": task["seat"], "captchaCode": "", "captcha": ""}
+        # Match the mutation used by the school's current seat-map page.
+        field = "reserueSeat"
+        result = self.worker.call("fetch", role=role, payload=graphql_payload(RESERVE, variables))
         errors = result.get("errors") if isinstance(result, dict) else None
         # Validation errors happen before GraphQL executes a mutation. No retries for
         # transport errors, business errors or an unknown mutation outcome.
         if (errors and not result.get("data") and all(
-                isinstance(e, dict) and str(e.get("message", "")).startswith('Cannot query field "reserveSeat"')
+                isinstance(e, dict) and str(e.get("message", "")).startswith('Cannot query field "reserueSeat"')
                 for e in errors)):
-            field = "reserueSeat"
-            result = self.worker.call("fetch", role=role, payload={
-                "query": RESERVE.replace("reserveSeat", field), "variables": variables})
+            field = "reserveSeat"
+            result = self.worker.call("fetch", role=role,
+                                      payload=graphql_payload(RESERVE.replace("reserueSeat", field), variables))
         data = self.unpack(result)
         if not data.get(field):
             raise Problem("学校没有确认选座成功，请在学校页面核对。")
@@ -216,6 +247,18 @@ class LiveProvider:
         token = self.tokens.get(role)
         if not token:
             raise Problem("退座校验已失效，已保留当前预约。")
-        result = self.query(role, CANCEL, {"sToken": token})
-        if result.get("reserveCancle") is None:
-            raise Problem("学校没有确认退座成功，请在学校页面核对。")
+        try:
+            self.query(role, CANCEL, {"sToken": token})
+        except Problem:
+            # The school can release the seat and then fail while building its
+            # response. Never repeat the mutation: read the actual reservation.
+            pass
+        try:
+            actual = self.query(role, INDEX)
+        except Problem:
+            raise Problem("退座结果暂时无法核对，已停止接棒，请在学校页面确认。") from None
+        if "reserve" not in actual or not actual.get("getSToken"):
+            raise Problem("退座结果缺少有效的账号核对信息，已停止接棒。")
+        self.tokens[role] = actual["getSToken"]
+        if actual["reserve"] is not None:
+            raise Problem("学校仍有预约记录，已停止接棒，请在学校页面核对。")

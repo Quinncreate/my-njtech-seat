@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from live_provider import BrowserWorker, LiveProvider
-from seat_core import Engine, Problem, Store
+from seat_core import ACTIVE, Engine, Problem, Store
 
 ROOT = Path(__file__).resolve().parent
 TEMP = ROOT.parents[1] / "tmp" / ROOT.name
@@ -22,7 +22,8 @@ def main():
     parser.add_argument("--port", type=int, default=5003)
     parser.add_argument("--data", type=Path, default=ROOT / "data" / "tasks.sqlite3")
     args = parser.parse_args()
-    token, stopping = secrets.token_urlsafe(32), threading.Event()
+    token, stopping, wake = secrets.token_urlsafe(32), threading.Event(), threading.Event()
+    restore_requested = threading.Event()
     origin = f"http://127.0.0.1:{args.port}"
 
     class Handler(BaseHTTPRequestHandler):
@@ -55,7 +56,7 @@ def main():
             url = urlsplit(self.path)
             try:
                 if url.path == "/api/health":
-                    return self.respond(200, {"app": "my-njtech-seat", "version": "0.2.0"})
+                    return self.respond(200, {"app": "my-njtech-seat", "version": "0.5.1"})
                 if url.path == "/api/state":
                     return self.respond(200, {**engine.view(), "csrf": token})
                 if url.path == "/api/libraries":
@@ -105,25 +106,43 @@ def main():
                     if parts[4] == "edit":
                         engine.update(parts[3], body)
                     else:
-                        result = engine.action(parts[3], parts[4]) or result
+                        if parts[4] == "finish" and body.get("release") is not True:
+                            raise Problem("结束轮换现在会退座，请刷新页面并确认后再操作。")
+                        result = engine.action(parts[3], parts[4], expected_owner=body.get("owner")) or result
+                        if parts[4] in ("start", "resume", "finish", "handoff"):
+                            wake.set()
                 elif url == "/api/mode":
                     engine.switch(body.get("mode"))
+                    if body.get("mode") == "live":
+                        restore_requested.set()
+                        wake.set()
                 elif url == "/api/accounts/login":
                     if store.data["mode"] != "live":
                         raise Problem("请先切换为真实账号模式。")
                     result = engine.providers["live"].login(body.get("role"))
+                    wake.set()
+                elif url == "/api/accounts/switch":
+                    with engine.lock:
+                        if store.data["mode"] != "live":
+                            raise Problem("请先切换为真实账号模式。")
+                        if any(t["mode"] == "live" and (t["status"] in ACTIVE or t["status"] == "paused" or t.get("pending") or t.get("finish_requested")) for t in store.data["tasks"]):
+                            raise Problem("请先结束当前任务，再切换账号。当前预约不会被主动退座。")
+                        result = engine.providers["live"].switch_account(body.get("role"))
+                        engine.accounts["live"][body.get("role")] = {"ready": False, "reservation": None}
+                    wake.set()
                 elif url == "/api/accounts/verify":
                     result = engine.refresh_accounts()
                 elif url == "/api/demo/advance":
                     engine.advance_demo()
                 elif url == "/api/shutdown":
                     stopping.set()
+                    wake.set()
                     threading.Thread(target=server.shutdown, daemon=True).start()
                 else:
                     return self.respond(404, {"error": "操作不存在。"})
                 self.respond(200, result)
             except Problem as e:
-                self.respond(409, {"error": str(e)})
+                self.respond(409, {"error": str(e), "task_id": e.task_id})
             except (ValueError, TypeError, KeyError):
                 self.respond(400, {"error": "请求内容不正确。"})
             except Exception:
@@ -135,15 +154,29 @@ def main():
     worker = BrowserWorker(TEMP / "browser")
     store = Store(args.data)
     engine = Engine(store, LiveProvider(worker))
+    if store.data["mode"] == "live":
+        restore_requested.set()
 
     def run():
+        next_verification = 0
         while not stopping.is_set():
             try:
+                if restore_requested.is_set():
+                    restore_requested.clear()
+                    engine.providers["live"].restore()
+                    next_verification = 0
+                live_idle = store.data["mode"] == "live" and not any(
+                    t["mode"] == "live" and t["status"] in ACTIVE
+                    for t in store.data["tasks"])
+                if live_idle and time.monotonic() >= next_verification:
+                    engine.refresh_accounts()
+                    next_verification = time.monotonic() + 8
                 engine.tick()
             except Exception:
                 # Pending operation intents are retained on unexpected failures.
                 pass
-            stopping.wait(4)
+            wake.wait(4)
+            wake.clear()
 
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
@@ -153,6 +186,7 @@ def main():
         pass
     finally:
         stopping.set()
+        wake.set()
         thread.join(timeout=40)
         worker.close()
         server.server_close()
