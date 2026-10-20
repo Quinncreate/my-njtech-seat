@@ -13,6 +13,17 @@ browser-profile*/
 browser-session*/
 storage-state*.json
 auth-state*.json
+BrowserProfiles/
+/profiles/
+accounts.json
+DevToolsActivePort
+Cookies
+Cookies-journal
+Login Data
+Login Data-journal
+Local State
+Preferences
+playwright/.auth/
 
 # Credentials and machine-specific configuration
 .env
@@ -33,6 +44,11 @@ node_modules/
 .playwright-cli/
 test-results/
 playwright-report/
+/output/
+/screenshots/
+*.har
+*.trace
+*.trace.zip
 tmp/
 .idea/
 .vscode/
