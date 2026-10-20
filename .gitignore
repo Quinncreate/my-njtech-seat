@@ -32,6 +32,8 @@ playwright/.auth/
 *.pem
 *.key
 server.toml
+*.dpapi
+*.dpapi.tmp
 
 # Generated files and local development tools
 __pycache__/

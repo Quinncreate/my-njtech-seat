@@ -42,7 +42,7 @@ h2 { font-size: 16px; margin: 0; line-height: 1.5; }
 .sidebar { position: fixed; inset: 0 auto 0 0; width: 224px; padding: 28px 16px 16px; display: flex; flex-direction: column; border-right: 1px solid #bca78e; background: #c9b9a5; z-index: 2; }
 .brand { display: flex; align-items: center; gap: 11px; padding: 0 8px; color: var(--text); }
 .brand img { width: 42px; height: 50px; object-fit: contain; }
-.brand strong { display: block; font-size: 21px; letter-spacing: 1px; font-weight: 650; }
+.brand strong { display: block; font-size: 19px; letter-spacing: .2px; font-weight: 650; white-space: nowrap; }
 .brand small { display: block; margin-top: 6px; color: #665245; font-size: 8px; letter-spacing: .8px; }
 .nav-label { margin: 38px 12px 12px; color: #665245; font-size: 10px; letter-spacing: 1px; }
 nav { display: grid; gap: 6px; }
@@ -257,7 +257,7 @@ footer { display: flex; justify-content: space-between; gap: 18px; color: #66524
 @media (max-width: 1250px) {
   .sidebar { width: 200px; padding-left: 12px; padding-right: 12px; }
   .brand { gap: 8px; padding-left: 5px; }
-  .brand strong { font-size: 19px; }
+  .brand strong { font-size: 18px; }
   .brand small { font-size: 7px; }
   .brand img { width: 36px; height: 46px; }
   main { margin-left: 200px; padding: 0 24px; }
@@ -273,7 +273,7 @@ footer { display: flex; justify-content: space-between; gap: 18px; color: #66524
 @media (max-width: 1060px) {
   .sidebar { width: 184px; }
   main { margin-left: 184px; padding: 0 20px; }
-  .brand strong { font-size: 17px; }
+  .brand strong { font-size: 16px; }
   .brand small { letter-spacing: .2px; }
   .side-note { padding-left: 7px; padding-right: 7px; }
   .composer-grid { grid-template-columns: minmax(0,1fr); }
@@ -422,6 +422,20 @@ footer { display: flex; justify-content: space-between; gap: 18px; color: #66524
 .account-buttons { display: grid; gap: 4px; }
 .account-buttons .text-button { white-space: nowrap; }
 .account-switch { color: #795d4b; font-size: 10px; }
+/* Credentials are shown only in the explicit account dialog, never task cards. */
+#account-dialog { width: min(560px,calc(100vw - 28px)); max-height: calc(100dvh - 40px); overflow-y: auto; padding: 26px; border: 1px solid var(--line); border-radius: 16px; color: var(--text); background: var(--panel); box-shadow: 0 24px 80px #49362e40; }
+#account-dialog::backdrop { background: #30282399; backdrop-filter: blur(4px); }
+.credential-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 10px; }
+.credential-heading h2 { margin: 0; font-size: 22px; }
+.credential-status { margin: 16px 0; padding: 10px 12px; border: 1px solid #b5bca5; border-radius: 8px; background: #d5dbca; color: #435440; font-size: 12px; }
+.credential-status.error { background: #e3c9be; border-color: #c39b8a; color: #703f32; }
+.credential-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; margin: 6px 0 16px; }
+.credential-row input { width: 100%; min-width: 0; margin: 0; font-family: ui-monospace,Consolas,monospace; }
+.credential-row button { padding: 9px 12px; }
+.credential-options { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.credential-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+.credential-actions button { min-height: 46px; flex: 1; }
+@media (max-width: 500px) { #account-dialog { padding: 20px 16px; } .credential-actions { flex-direction: column; } }
 @media (max-width: 760px) {
   .task-actions button { flex: 1; min-width: 110px; min-height: 48px; padding: 12px 16px; }
   .account-card { flex-wrap: wrap; }

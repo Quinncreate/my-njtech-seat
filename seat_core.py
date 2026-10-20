@@ -142,7 +142,7 @@ class Engine:
         for r, a in accounts.items():
             a["cooldown"] = max(0, math.ceil(data["cooldowns"].get(mode + ":" + r, 0) - now))
         return {"mode": mode, "now": now, "accounts": accounts,
-                "tasks": data["tasks"], "events": data["events"], "version": "0.5.1"}
+                "tasks": data["tasks"], "events": data["events"], "version": "0.6.0"}
 
     def create(self, body, *, _original=None):
         with self.lock:

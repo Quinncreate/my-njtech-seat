@@ -1,6 +1,6 @@
-# 我的占座
+# 我会去图书馆
 
-南京工业大学江浦校区的本地自习预约助手，当前版本 **v0.5.1**。在 Windows 上启动，用浏览器管理任务；Python 调度、Node.js 连接学校浏览器会话，日常预约和轮换不需要 AI API Key。
+南京工业大学江浦校区的本地自习预约助手，当前版本 **v0.6.0**。在 Windows 上启动，用浏览器管理任务；Python 调度、Node.js 连接学校浏览器会话，日常预约和轮换不需要 AI API Key。
 
 个人项目，非学校官方软件。当前适配逸夫、浦江两馆；其他学校的接口需要另外适配。
 
@@ -25,7 +25,7 @@ python .\server.py
 
 随后打开 [本机任务页面](http://127.0.0.1:5003/dashboard/tasks)。建议保持 `SeatWorkspace\project\项目名` 的目录层级，程序会把缓存和测试文件放在同一工作区的 `tmp\项目名`。
 
-日常双击 `启动我的占座.pyw` 即可隐藏终端启动，也可自行创建桌面快捷方式并选用 `static/njtech-emblem.ico`。仓库提供源码，不附带打包安装器或他人电脑的快捷方式。
+日常双击 `启动我的占座.pyw` 即可隐藏终端启动，也可自行创建名为“我会去图书馆”的桌面快捷方式并选用 `static/njtech-emblem.ico`。仓库提供源码，不附带打包安装器或他人电脑的快捷方式。
 
 ## 首次使用
 
@@ -46,6 +46,7 @@ python .\server.py
 - 点击“结束轮换”后核对并退掉本任务座位；暂停、计划结束和退出后台保留现有预约。
 - 操作前保存意图，重启先核对学校实际预约；结果不明确时提示处理。
 - v0.5.1 修复旧空闲暂停记录误拦截新任务；实际冲突会显示并定位具体任务。
+- v0.6.0 提供独立的重新登录窗口、账号密码查看／复制与可选的 Windows 本机加密保存；加固后台无终端启动。
 
 ## 使用边界
 
@@ -76,6 +77,6 @@ node --test tests/test_browser_headers.cjs
 node .\browser_worker.js (Join-Path $seatCache 'browser-smoke') --smoke-test
 ```
 
-当前有 72 项 Python 回归和 1 项 Node 本地 HTTP 请求头回归。浏览器通信检查只访问本机测试页面，不登录学校或操作真实预约。
+当前有 77 项 Python 回归（含 5 项 Windows 本机加密凭据检查）和 1 项 Node 本地 HTTP 请求头回归。浏览器通信检查只访问本机测试页面，不登录学校或操作真实预约。
 
 设计参考见 [DESIGN_SOURCES.md](DESIGN_SOURCES.md)，校徽出处见 [static/EMBLEM_SOURCE.md](static/EMBLEM_SOURCE.md)。

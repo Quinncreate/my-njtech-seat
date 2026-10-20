@@ -10,6 +10,8 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 
+from process_runtime import hidden_process_options
+
 ROOT = Path(__file__).resolve().parent
 URL = "http://127.0.0.1:5003"
 
@@ -27,15 +29,17 @@ def main():
         temp = ROOT.parents[1] / "tmp" / ROOT.name
         temp.mkdir(parents=True, exist_ok=True)
         executable = Path(sys.executable)
-        if executable.name.lower() == "pythonw.exe":
-            executable = executable.with_name("python.exe")
+        if executable.name.lower() == "python.exe":
+            windowless = executable.with_name("pythonw.exe")
+            if windowless.is_file():
+                executable = windowless
         env = os.environ.copy()
         env["PYTHONPYCACHEPREFIX"] = str(temp / "python-cache")
         # Server suppresses request logs; this file only receives startup failures.
         with (temp / "startup.log").open("ab") as log:
             proc = subprocess.Popen([str(executable), str(ROOT / "server.py")], cwd=ROOT,
                                     stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env,
-                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                                    **hidden_process_options())
         for _ in range(60):
             if health():
                 break
@@ -51,4 +55,4 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        ctypes.windll.user32.MessageBoxW(None, str(e), "我的占座", 0x10)
+        ctypes.windll.user32.MessageBoxW(None, str(e), "我会去图书馆", 0x10)

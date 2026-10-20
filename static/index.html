@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#d8cbb9">
-  <title>我的占座 · 南工自习</title>
+  <title>我会去图书馆 · 南工自习</title>
   <link rel="icon" href="/favicon.ico">
   <link rel="stylesheet" href="/style.css">
 </head>
@@ -26,7 +26,7 @@
 <aside class="sidebar">
   <a class="brand" href="#overview">
     <img src="/emblem.png" alt="南京工业大学校徽">
-    <span><strong>我的占座</strong><small>NJTECH · STUDY SPACE</small></span>
+    <span><strong>我会去图书馆</strong><small>NJTECH · STUDY SPACE</small></span>
   </a>
   <div class="nav-label">自习工作台</div>
   <nav aria-label="主要导航">
@@ -118,8 +118,21 @@
       </div>
     </form>
   </section>
-  <footer><span>南京工业大学 · 江浦校区 <span class="version">我的占座 v0.5.1</span></span><span>关闭网页后后台仍运行 · 电脑休眠时暂停执行</span></footer>
+  <footer><span>南京工业大学 · 江浦校区 <span class="version">我会去图书馆 v0.6.0</span></span><span>关闭网页后后台仍运行 · 电脑休眠时暂停执行</span></footer>
 </main>
+<dialog id="account-dialog" aria-labelledby="account-dialog-title">
+  <form id="account-form" autocomplete="off">
+    <div class="credential-heading"><div><p class="eyebrow">固定账号 · 本机保管</p><h2 id="account-dialog-title">重新登录</h2></div><button type="button" id="close-account" class="text-button" aria-label="关闭账号窗口">关闭</button></div>
+    <p class="helper">复制账号密码，进入学校页面后选择“智慧南工”登录；完成验证码后回这里验证，原账号绑定保持不变。</p>
+    <div id="credential-status" class="credential-status" role="status">正在读取本机凭据…</div>
+    <label for="saved-username">学校账号</label><div class="credential-row"><input id="saved-username" name="username" type="text" maxlength="128" autocomplete="off" spellcheck="false" placeholder="填写学校账号"><button type="button" class="secondary" data-copy-credential="username">复制账号</button></div>
+    <label for="saved-password">登录密码</label><div class="credential-row"><input id="saved-password" name="password" type="text" maxlength="512" autocomplete="off" spellcheck="false" placeholder="填写登录密码"><button type="button" class="secondary" data-copy-credential="password">复制密码</button></div>
+    <div class="credential-options"><button type="button" id="toggle-password" class="text-button">隐藏密码</button><button type="submit" id="save-credentials" class="secondary">加密保存到本机</button></div>
+    <p class="helper">保存后，下次打开可直接查看和复制。账号密码仅保存在当前 Windows 用户的加密文件中。</p>
+    <div class="credential-actions"><button type="button" id="open-school-login" class="primary">进入学校重新登录</button><button type="button" id="verify-account" class="secondary">我已登录，验证状态</button></div>
+    <p id="account-login-result" class="helper" aria-live="polite"></p>
+  </form>
+</dialog>
 <div id="toast" role="status" aria-live="polite" hidden></div>
 <script src="/app.js" defer></script>
 </body>

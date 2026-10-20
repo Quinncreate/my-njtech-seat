@@ -5,6 +5,7 @@ const labels = {draft:'草稿',scheduled:'等待开始',running:'运行中',reco
 let state, csrf='', refreshing=false, editorId=null, seatAbort, roomSequence=0, toastTimer, exiting=false;
 let editorSequence=0, operating=false, lastRendered='', seatLayout=null, seatLoading=false, mapZoom=1, editorTask=null;
 let currentView='tasks', selectedTaskId=null, initialized=false;
+let accountRole=null, accountDialogSequence=0, accountBusy=false;
 const dialog=$('#editor'), form=$('#task-form');
 const viewNames={overview:['南京工业大学 · 江浦校区','自习工作台','账号、预约和接棒状态，尽在这里。'],tasks:['南京工业大学 · 江浦校区','我的自习任务','把预约安排好，把时间留给专注。'],new:['南京工业大学 · 江浦校区','选择你的自习座位','找到一个好位置，开始今天的专注。']};
 function isEditorOpen(){return currentView==='new' && !dialog.hidden;}
@@ -67,7 +68,7 @@ function renderTasks(){
   if(running&&!t.finish_requested&&!t.manual_handoff)buttons.push(`<button class="secondary" data-action="pause" data-id="${esc(t.id)}">暂停</button>`);
   const other=t.owner==='A'?'B':t.owner==='B'?'A':null;
   const wait=other?Math.max(0,Math.ceil(t.acquired+65-state.now),state.accounts[other].cooldown||0):0;
-  const controlsReady=['0.5.0','0.5.1'].includes(state.version);
+  const controlsReady=['0.5.0','0.5.1','0.6.0'].includes(state.version);
   let handoffReason=!controlsReady?'后台正在更新，请稍后刷新':!other?'实际持座后可手动换号':t.pending||t.manual_handoff?'正在核对上次操作':!['running','paused'].includes(t.status)?'当前任务不能切换':!Object.values(state.accounts).every(a=>a.ready)?'请先恢复两个账号的登录':state.accounts[other].reservation?'接棒账号已有预约':state.accounts[t.owner].reservation?.seat!==t.seat||state.accounts[t.owner].reservation?.lib!==t.lib?'当前持座状态需要核对':wait?`保护等待还剩 ${wait} 秒`:'';
   if(t.status!=='completed'&&!t.finish_requested)buttons.push(`<button class="secondary" data-action="handoff" data-id="${esc(t.id)}" data-owner="${esc(t.owner||'')}" ${handoffReason?'disabled':''} title="${esc(handoffReason||'让另一个账号接棒同一座位')}">${other?'切换至账号 '+other:'切换持座账号'}${wait?'（'+wait+'秒）':''}</button>`);
   if(t.status!=='completed')buttons.push(`<button class="secondary" data-action="finish" data-id="${esc(t.id)}" ${t.status==='finishing'||!controlsReady?'disabled':''}>${t.status==='finishing'?'正在退座…':t.finish_requested?'重试退座':'结束轮换'}</button>`);
@@ -344,7 +345,64 @@ $('#account-list').addEventListener('click',e=>{
   if(button.dataset.switch){
     if(!confirm('更换账号 '+button.dataset.switch+'？将新建独立登录档案，原绑定不会用于新账号。请先结束当前任务。'))return;
     operate(button,()=>api('/api/accounts/switch',{role:button.dataset.switch}),'新登录档案已打开，登录后自动绑定；另一个账号保持原绑定。');
-  }else operate(button,()=>api('/api/accounts/login',{role:button.dataset.login}),'固定账号的学校窗口已打开，完成登录后会自动验证。');
+  }else openAccountDialog(button.dataset.login);
+});
+const accountDialog=$('#account-dialog'), accountForm=$('#account-form');
+function credentialStatus(message,error=false){const el=$('#credential-status');el.textContent=message;el.classList.toggle('error',error);}
+function accountControls(busy){
+  accountBusy=busy;
+  accountForm.querySelectorAll('button,input').forEach(el=>{el.disabled=busy;});
+}
+async function openAccountDialog(role){
+  if(accountBusy||operating)return;
+  const sequence=++accountDialogSequence;accountRole=role;accountForm.reset();
+  $('#saved-password').type='text';$('#toggle-password').textContent='隐藏密码';
+  $('#account-dialog-title').textContent='账号 '+role+' · 登录与凭据';
+  $('#account-login-result').textContent='';credentialStatus('正在读取本机凭据…');
+  accountDialog.showModal();accountControls(true);
+  try{
+    const credentials=await api('/api/accounts/credentials/read',{role});
+    if(sequence!==accountDialogSequence||!accountDialog.open)return;
+    accountForm.elements.username.value=credentials.username;
+    accountForm.elements.password.value=credentials.password;
+    credentialStatus(credentials.username?'已读取本机加密凭据，可直接复制。':'尚未保存凭据。填写并保存后，下次自动显示。');
+  }catch(e){if(sequence===accountDialogSequence)credentialStatus(e.message,true);}
+  finally{if(sequence===accountDialogSequence)accountControls(false);}
+}
+function closeAccountDialog(){
+  if(accountBusy)return;
+  accountDialog.close();
+}
+accountDialog.addEventListener('cancel',e=>{if(accountBusy)e.preventDefault();});
+accountDialog.addEventListener('close',()=>{accountDialogSequence++;accountForm.reset();accountRole=null;});
+$('#close-account').addEventListener('click',closeAccountDialog);
+$('#toggle-password').addEventListener('click',()=>{const input=$('#saved-password');input.type=input.type==='password'?'text':'password';$('#toggle-password').textContent=input.type==='password'?'显示密码':'隐藏密码';});
+accountForm.addEventListener('click',async e=>{
+  const button=e.target.closest('[data-copy-credential]');if(!button)return;
+  const input=accountForm.elements[button.dataset.copyCredential];
+  if(!input.value){toast('请先填写'+(button.dataset.copyCredential==='username'?'账号':'密码')+'。',true);return;}
+  try{await navigator.clipboard.writeText(input.value);toast(button.dataset.copyCredential==='username'?'账号已复制。':'密码已复制。');}
+  catch{input.focus();input.select();toast('已选中文字，请按 Ctrl+C 复制。');}
+});
+accountForm.addEventListener('submit',async e=>{
+  e.preventDefault();if(accountBusy||!accountRole)return;
+  accountControls(true);
+  try{await api('/api/accounts/credentials/save',{role:accountRole,username:accountForm.elements.username.value,password:accountForm.elements.password.value});credentialStatus('已在本机加密保存，下次打开可直接复制。');}
+  catch(error){credentialStatus(error.message,true);}
+  finally{accountControls(false);}
+});
+$('#open-school-login').addEventListener('click',async()=>{
+  if(accountBusy||!accountRole)return;accountControls(true);
+  $('#account-login-result').textContent='正在打开账号 '+accountRole+' 的学校登录页…';
+  try{await api('/api/accounts/login',{role:accountRole});$('#account-login-result').textContent='学校窗口已打开。请选择“智慧南工”，粘贴账号密码并完成验证码，再回这里验证状态。';}
+  catch(error){$('#account-login-result').textContent=error.message;}
+  finally{accountControls(false);}
+});
+$('#verify-account').addEventListener('click',async()=>{
+  if(accountBusy||!accountRole)return;accountControls(true);
+  try{await api('/api/accounts/verify',{});await refresh();$('#account-login-result').textContent=state.accounts[accountRole].ready?'账号 '+accountRole+' 已登录并通过验证。':'尚未验证成功，请确认学校窗口已进入座位预约页面。';}
+  catch(error){$('#account-login-result').textContent=error.message;}
+  finally{accountControls(false);}
 });
 $('#verify').addEventListener('click',e=>operate(e.currentTarget,()=>api('/api/accounts/verify',{}),'账号状态已刷新。'));
 $('#advance').addEventListener('click',e=>operate(e.currentTarget,()=>api('/api/demo/advance',{}),'模拟时间已推进，已检查一次接棒。'));

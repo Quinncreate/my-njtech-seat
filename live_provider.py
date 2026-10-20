@@ -9,7 +9,6 @@ import datetime as dt
 import json
 import queue
 import re
-import shutil
 import subprocess
 import threading
 import time
@@ -17,6 +16,7 @@ from pathlib import Path
 
 from seat_core import Problem
 from seat_layout import jiangpu_libraries, normalize_layout
+from process_runtime import hidden_process_options, node_executable
 
 INDEX = "query index { userAuth { reserve { reserve { lib_id seat_key exp_date exp_date_str status } getSToken } } }"
 LIBS = "query list { userAuth { reserve { libs(libType:-1) { lib_id lib_name is_open lib_floor lib_group_id } libGroups { id group_name } } } }"
@@ -68,19 +68,22 @@ class BrowserWorker:
         self.lock = threading.Lock()
         self.messages = queue.Queue()
         self.seq = 0
+        self.node = None
 
     def start(self):
         if self.proc and self.proc.poll() is None:
             return
-        node = shutil.which("node")
-        if not node:
-            raise Problem("找不到浏览器组件 Node.js，请安装 Node.js 22 或更高版本。")
+        if not self.node:
+            try:
+                self.node = node_executable()
+            except (OSError, subprocess.SubprocessError):
+                raise Problem("无法启动浏览器组件，请检查 Node.js 22 或更高版本是否安装正常。") from None
         self.temporary.mkdir(parents=True, exist_ok=True)
         self.messages = queue.Queue()
         self.proc = subprocess.Popen(
-            [node, str(Path(__file__).with_name("browser_worker.js")), str(self.temporary)],
+            [self.node, str(Path(__file__).with_name("browser_worker.js")), str(self.temporary)],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=True, encoding="utf-8", creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            text=True, encoding="utf-8", **hidden_process_options(),
         )
         messages, proc = self.messages, self.proc
 

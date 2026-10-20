@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from live_provider import BrowserWorker, LiveProvider
+from credential_store import CredentialStore
 from seat_core import ACTIVE, Engine, Problem, Store
 
 ROOT = Path(__file__).resolve().parent
@@ -56,7 +57,7 @@ def main():
             url = urlsplit(self.path)
             try:
                 if url.path == "/api/health":
-                    return self.respond(200, {"app": "my-njtech-seat", "version": "0.5.1"})
+                    return self.respond(200, {"app": "my-njtech-seat", "version": "0.6.0"})
                 if url.path == "/api/state":
                     return self.respond(200, {**engine.view(), "csrf": token})
                 if url.path == "/api/libraries":
@@ -132,6 +133,10 @@ def main():
                     wake.set()
                 elif url == "/api/accounts/verify":
                     result = engine.refresh_accounts()
+                elif url == "/api/accounts/credentials/read":
+                    result = credentials.get(body.get("role"))
+                elif url == "/api/accounts/credentials/save":
+                    result = credentials.save(body.get("role"), body.get("username"), body.get("password"))
                 elif url == "/api/demo/advance":
                     engine.advance_demo()
                 elif url == "/api/shutdown":
@@ -152,6 +157,7 @@ def main():
     server.daemon_threads = True
     # Reserve the port before opening storage, so a duplicate launch cannot alter tasks.
     worker = BrowserWorker(TEMP / "browser")
+    credentials = CredentialStore()
     store = Store(args.data)
     engine = Engine(store, LiveProvider(worker))
     if store.data["mode"] == "live":

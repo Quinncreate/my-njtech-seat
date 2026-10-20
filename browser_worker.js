@@ -116,7 +116,9 @@ class Connection {
     const portFile=path.join(profile,'DevToolsActivePort');let oldPort;
     try {oldPort=fs.readFileSync(portFile,'utf8');}catch{}
     // Passing a startup URL disables Chrome's session-cookie/tab restoration.
-    this.proc=spawn(executable,['--remote-debugging-address=127.0.0.1','--remote-debugging-port=0','--user-data-dir='+profile,'--restore-last-session','--no-first-run','--no-default-browser-check','--disable-sync','--disable-background-networking',...(smoke?['--headless=new']:[])],{stdio:'ignore',windowsHide:true});
+    // A school login browser is a GUI window. Hiding it prevents the user from
+    // reaching an expired session or completing the login form.
+    this.proc=spawn(executable,['--remote-debugging-address=127.0.0.1','--remote-debugging-port=0','--user-data-dir='+profile,'--restore-last-session','--no-first-run','--no-default-browser-check','--disable-sync','--disable-background-networking',...(smoke?['--headless=new']:[])],{stdio:'ignore',windowsHide:smoke});
     this.proc.on('error',()=>{});
     let details;
     for(let i=0;i<80;i++){
@@ -159,6 +161,24 @@ class Connection {
     }
     await this.send('Target.createTarget',{url:this.info.entry||portal,newWindow:true});
   }
+  async openLogin(url=portal){
+    const {targetInfos}=await this.send('Target.getTargets');
+    const target=targetInfos.find(t=>t.type==='page'&&/^https:\/\/[^/]*njtech\.edu\.cn\//.test(t.url))||targetInfos.find(t=>t.type==='page');
+    this.captured=undefined;
+    let targetId=target?.targetId;
+    if(targetId){
+      let sid=[...this.sessions].find(([,s])=>s.target===targetId)?.[0];
+      if(!sid){const attached=await this.send('Target.attachToTarget',{targetId,flatten:true});sid=attached.sessionId;await this.attach(sid,target);}
+      await this.send('Page.navigate',{url},sid);
+      await this.send('Page.bringToFront',{},sid).catch(()=>{});
+    }else ({targetId}=await this.send('Target.createTarget',{url,newWindow:true}));
+    // Activating a tab alone does not restore a minimized browser window.
+    try {
+      const {windowId,bounds}=await this.send('Browser.getWindowForTarget',{targetId});
+      if(bounds.windowState==='minimized')await this.send('Browser.setWindowBounds',{windowId,bounds:{windowState:'normal'}});
+    }catch{}
+    await this.send('Target.activateTarget',{targetId});
+  }
   async ready(){if(this.socket?.readyState===WebSocket.OPEN)return;if(!this.startup)this.startup=this.start().catch(e=>{this.startup=undefined;throw e;});await this.startup;}
   async discover(){
     if(this.captured)return true;
@@ -195,7 +215,7 @@ async function run(command){
     for(let i=0;i<20;i++){const found=await Promise.all(['A','B'].map(role=>connections.get(role)?.discover().catch(()=>false)));if(found.every(Boolean))break;await sleep(250);}
     return status();
   }
-  if(command.method==='login'){const c=await connection(command.role);await c.openEntry();return {opened:true,...status()[command.role]};}
+  if(command.method==='login'){const c=await connection(command.role);await c.openLogin();return {opened:true,...status()[command.role]};}
   if(command.method==='switch'){
     const role=command.role;account(role);await connections.get(role)?.close();connections.delete(role);
     manifest.accounts[role]={profile:role.toLowerCase()+'-'+randomUUID(),salt:randomUUID()};saveManifest();
@@ -230,11 +250,16 @@ async function smokeTest(){
     const restored=await connection('A');
     const saved=await restored.send('Storage.getCookies');
     if(restored.info.profile!==profile||!saved.cookies.some(c=>c.name==='seat_smoke')||!saved.cookies.some(c=>c.name==='seat_session'))throw Error('login profile not retained');
+    const loginUrl=url+'?login-test=1';
+    await restored.openLogin(loginUrl);
+    let loginTargets;
+    for(let i=0;i<20;i++){loginTargets=await restored.send('Target.getTargets');if(loginTargets.targetInfos.some(t=>t.type==='page'&&t.url===loginUrl))break;await sleep(100);}
+    if(!loginTargets.targetInfos.some(t=>t.type==='page'&&t.url===loginUrl)||restored.info.profile!==profile||restored.captured)throw Error('login navigation failed');
     const fixed=account('A');fixed.accountHash=accountHash(fixed,'100000000001');restored.info.identityMismatch=true;
     let rejected=false;try {await restored.fetch({query:'query {}'});}catch(e){rejected=e.code==='IDENTITY_MISMATCH';}
     if(!rejected)throw Error('identity not enforced');
     if(!allowed('https://seat.njtech.edu.cn/index.php/graphql/')||allowed('https://unrelated.invalid/index.php/graphql/'))throw Error('endpoint guard');
-    process.stdout.write(JSON.stringify({browser:'ok',isolatedAccounts:2,persistentProfile:true,identityGuard:true,manifestFallback:true,realAccountOperations:0})+'\n');
+    process.stdout.write(JSON.stringify({browser:'ok',isolatedAccounts:2,persistentProfile:true,loginNavigation:true,identityGuard:true,manifestFallback:true,realAccountOperations:0})+'\n');
   }finally {await shutdown();server.close();}
 }
 if(smoke)smokeTest().catch(error=>{process.stdout.write(JSON.stringify({smoke:'failed',reason:error.message})+'\n');process.exitCode=1;});
